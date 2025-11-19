@@ -1,18 +1,15 @@
+from funcoes import menu
 from openpyxl import Workbook
-from GestaoFinanceira.Funcoes import funcao
 
 wb = Workbook()
 ws = wb.active
-ws.title = "Gestão de transações"
-ws.append(["Tipo", "Categoria", "Valor", "Data"])
+ws.title = "Gestor de Gastos Pessoal"
 
-wb.save("Gestao_Financeira.xlsx")
+ws["A1"] = "Tipo"
+ws["B1"] = "Categoria"
+ws["C1"] = "Mes"
+ws["D1"] = "Ano"
+ws["E1"] = "Valor"
+ws["F1"] = "Descricao"
 
-while True:
-    print("\n================= MENU PRINCIPAL =================")
-    print(f"Bem vindo á sua gestão financeira! Selecione o que deseja: \n 1- Adicionar transação\n 2- Remover transação\n "
-          f"3- Listar Tansação por categoria\n 4- Listar Tansação por período\n 5- Vizualizar o saldo\n 0- Encerrar")
-    n = int(input(f"Escolha a opção que deseja:"))
-    resultado = funcao(n, ws, wb)
-    if resultado == "quebra":
-        break
+menu(ws,wb)
