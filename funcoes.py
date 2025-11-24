@@ -12,13 +12,19 @@ from openpyxl import load_workbook, Workbook
 from collections import Counter, defaultdict
 import matplotlib.pyplot as plt
 
+# -------------------------
+# Config e logging (exporta logger)
+# -------------------------
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
-RUN_LOG = os.path.join(LOG_DIR, "operations.log")
+
+# arquivo principal em txt conforme solicitado
+RUN_LOG = os.path.join(LOG_DIR, "gestor_financeiro.txt")
 
 logger = logging.getLogger("gestor_financeiro")
 if not logger.handlers:
     logger.setLevel(logging.DEBUG)
+    # RotatingFileHandler para evitar arquivos gigantes
     file_handler = RotatingFileHandler(RUN_LOG, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_formatter = logging.Formatter("%(asctime)s | %(levelname)-7s | %(message)s", "%Y-%m-%dT%H:%M:%S")
@@ -30,6 +36,12 @@ if not logger.handlers:
     console_handler.setFormatter(file_formatter)
     logger.addHandler(console_handler)
 
+# cabeçalho inicial do log
+logger.info(f"==== INICIANDO SISTEMA ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ====")
+
+# -------------------------
+# Auth (SQLite + PBKDF2)
+# -------------------------
 AUTH_DB = "auth.db"
 PBKDF2_ITERATIONS = 200_000
 HASH_NAME = "sha256"
@@ -53,7 +65,7 @@ def init_auth_db():
     """)
     conn.commit()
     conn.close()
-    logger.debug("Banco de auth inicializado (auth.db)")
+    logger.debug("[AUTH] Banco de auth inicializado (auth.db)")
 
 def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> bytes:
     return hashlib.pbkdf2_hmac(HASH_NAME, password.encode('utf-8'), salt, iterations)
@@ -75,13 +87,13 @@ def create_user(username: str, password: str) -> bool:
                     (username, hash_hex, salt_hex, iterations, created_at))
         conn.commit()
         conn.close()
-        logger.info(f"USER_CREATED | username={username}")
+        logger.info(f"[CADASTRO] novo_usuario={username}")
         return True
     except sqlite3.IntegrityError:
-        logger.warning(f"USER_CREATE_FAILED | username_exists={username}")
+        logger.warning(f"[CADASTRO_FALHOU] usuario_existente={username}")
         return False
     except Exception:
-        logger.exception("USER_CREATE_ERROR")
+        logger.exception("[CADASTRO_ERRO]")
         return False
 
 def verify_user(username: str, password: str) -> bool:
@@ -93,23 +105,27 @@ def verify_user(username: str, password: str) -> bool:
         row = cur.fetchone()
         conn.close()
     except Exception:
-        logger.exception("AUTH_DB_ERROR")
+        logger.exception("[AUTH_DB_ERROR]")
         return False
     if not row:
-        logger.info(f"LOGIN_FAILED | username_not_found={username}")
+        logger.info(f"[LOGIN_FALHOU] usuario_nao_encontrado={username}")
         return False
     stored_hash_hex, salt_hex, iterations = row
     salt = binascii.unhexlify(salt_hex.encode('ascii'))
     calc_hash = _hash_password(password, salt, int(iterations))
     match = hmac.compare_digest(binascii.unhexlify(stored_hash_hex), calc_hash)
     if match:
-        logger.info(f"LOGIN_SUCCESS | username={username}")
+        logger.info(f"[LOGIN] usuario={username}")
     else:
-        logger.warning(f"LOGIN_FAILED | username={username} | wrong_password")
+        logger.warning(f"[LOGIN_FALHOU] usuario={username} | senha_incorreta")
     return match
 
+# initialize auth DB on import (idempotent)
 init_auth_db()
 
+# -------------------------
+# Excel storage (com coluna Usuario)
+# -------------------------
 EXCEL_PATH = "Gestão.xlsx"
 
 def ensure_excel_with_user_col(path):
@@ -118,7 +134,7 @@ def ensure_excel_with_user_col(path):
         ws = wb.active
         ws.append(["Tipo", "Categoria", "Mês", "Ano", "Valor", "Descrição", "Usuario"])
         wb.save(path)
-        logger.info(f"Arquivo '{path}' criado com cabeçalho (incluindo 'Usuario').")
+        logger.info(f"[EXCEL] criado '{path}' com cabeçalho (incluindo 'Usuario').")
         return
     wb = load_workbook(path)
     ws = wb.active
@@ -139,15 +155,18 @@ def ensure_excel_with_user_col(path):
         for col_idx, val in enumerate(new_header, start=1):
             ws.cell(row=1, column=col_idx, value=val)
         wb.save(path)
-        logger.info(f"Arquivo '{path}' atualizado: cabeçalho ajustado para incluir 'Usuario'.")
+        logger.info(f"[EXCEL] '{path}' atualizado: cabeçalho ajustado para incluir 'Usuario'.")
 
 ensure_excel_with_user_col(EXCEL_PATH)
 wb = load_workbook(EXCEL_PATH)
 ws = wb.active
 
+# -------------------------
+# Core operations (Excel-backed)
+# -------------------------
 def adicionar_transacao(tipo, categoria, mes, ano, valor, descricao, user=None):
     if user is None:
-        logger.warning("ADICIONAR_NEGADO | sem usuario autenticado")
+        logger.warning("[ADICIONAR_NEGADO] sem usuario autenticado")
         raise PermissionError("Faça login para adicionar transações.")
     try:
         linha = ws.max_row + 1
@@ -159,22 +178,29 @@ def adicionar_transacao(tipo, categoria, mes, ano, valor, descricao, user=None):
         ws.cell(row=linha, column=6, value=descricao)
         ws.cell(row=linha, column=7, value=user)
         wb.save(EXCEL_PATH)
-        logger.info(f"ADICIONAR | user={user} | linha={linha} | tipo={tipo} | categoria={categoria} | mes={mes} | ano={ano} | valor={valor:.2f} | desc={descricao}")
+        # Log formatado e limpo
+        try:
+            mes_i = int(mes)
+            ano_i = int(ano)
+        except Exception:
+            mes_i = mes
+            ano_i = ano
+        logger.info(f"[ADICIONAR] user={user} | {tipo} | {categoria} | R${float(valor):.2f} | {mes_i:02d}/{ano_i} | {descricao}")
         return linha
-    except Exception as e:
-        logger.exception(f"Falha ao adicionar transação | user={user}")
+    except Exception:
+        logger.exception("[ADICIONAR_ERRO]")
         raise
 
 def remover_transacao(numero, user=None):
     if user is None:
-        logger.warning("REMOVER_NEGADO | sem usuario autenticado")
+        logger.warning("[REMOVER_NEGADO] sem usuario autenticado")
         raise PermissionError("Faça login para remover transações.")
     try:
         linha_real = numero + 1
         if 2 <= linha_real <= ws.max_row:
             owner = ws.cell(linha_real, 7).value
             if owner is not None and owner != user:
-                logger.warning(f"REMOVER_NEGADO_OWNER_MISMATCH | user={user} tenta remover item de {owner} | numero={numero}")
+                logger.warning(f"[REMOVER_NEGADO_OWNER] user={user} tenta remover item de {owner} | transacao={numero}")
                 return False
             tipo = ws.cell(linha_real, 1).value
             categoria = ws.cell(linha_real, 2).value
@@ -185,13 +211,13 @@ def remover_transacao(numero, user=None):
 
             ws.delete_rows(linha_real)
             wb.save(EXCEL_PATH)
-            logger.info(f"REMOVER | user={user} | numero={numero} | tipo={tipo} | categoria={categoria} | mes={mes} | ano={ano} | valor={valor} | desc={descricao}")
+            logger.info(f"[REMOVER] user={user} | transacao={numero} | {tipo} | {categoria} | R${float(valor):.2f} | {mes}/{ano} | {descricao}")
             return True
         else:
-            logger.warning(f"Tentativa de remover número inválido | user={user} | numero={numero}")
+            logger.warning(f"[REMOVER_INVALIDO] user={user} | transacao={numero}")
             return False
-    except Exception as e:
-        logger.exception(f"Erro ao remover transação | user={user}")
+    except Exception:
+        logger.exception("[REMOVER_ERRO]")
         return False
 
 def listar_categoria(categoria):
@@ -203,7 +229,7 @@ def listar_categoria(categoria):
                 f"R${ws.cell(i,5).value} | {ws.cell(i,6).value} | {ws.cell(i,7).value}"
             )
     mensagem = "\n".join(lista) if lista else "Nenhuma transação encontrada."
-    logger.info(f"LISTAR_CATEGORIA | categoria={categoria} | resultados={len(lista)}")
+    logger.info(f"[LISTAR_CATEGORIA] categoria={categoria} | resultados={len(lista)}")
     return mensagem
 
 def listar_periodo(mi, ai, mf, af):
@@ -219,26 +245,47 @@ def listar_periodo(mi, ai, mf, af):
                 f"{i-1} | {ws.cell(i,1).value} | {ws.cell(i,2).value} | R${ws.cell(i,5).value} | {ws.cell(i,6).value} | {ws.cell(i,7).value}"
             )
     mensagem = "\n".join(lista) if lista else "Nenhuma transação no período."
-    logger.info(f"LISTAR_PERIODO | {ai:04d}-{mi:02d} -> {af:04d}-{mf:02d} | resultados={len(lista)}")
+    logger.info(f"[LISTAR_PERIODO] {ai:04d}-{mi:02d} -> {af:04d}-{mf:02d} | resultados={len(lista)}")
     return mensagem
 
-def ver_saldo():
+def ver_saldo(username: str = None):
+    """
+    Se username for None -> calcula saldo global (todas transações).
+    Se username for uma string -> calcula apenas as transações pertencentes a esse usuário.
+    Retorna string formatada (Entradas, Saídas, Saldo).
+    """
     entradas = 0.0
     saidas = 0.0
     for i in range(2, ws.max_row + 1):
-        tipo = ws.cell(i, 1).value
         try:
-            valor = float(ws.cell(i, 5).value)
+            tipo = ws.cell(i, 1).value
+            valor_cell = ws.cell(i, 5).value
+            valor = float(valor_cell) if valor_cell not in (None, "") else 0.0
         except Exception:
-            valor = 0.0
+            continue
+
+        # Se username foi especificado, cheque a coluna Usuario (7)
+        if username is not None:
+            owner = ws.cell(i, 7).value
+            if owner != username:
+                continue
+
         if tipo == "Entrada":
             entradas += valor
         else:
             saidas += valor
+
     saldo = entradas - saidas
-    logger.info(f"VER_SALDO | entradas={entradas:.2f} | saidas={saidas:.2f} | saldo={saldo:.2f}")
+    if username:
+        logger.info(f"[SALDO] user={username} | entradas={entradas:.2f} | saidas={saidas:.2f} | saldo={saldo:.2f}")
+    else:
+        logger.info(f"[SALDO] global | entradas={entradas:.2f} | saidas={saidas:.2f} | saldo={saldo:.2f}")
+
     return f"Entradas: R${entradas:.2f}\nSaídas: R${saidas:.2f}\nSaldo Final: R${saldo:.2f}"
 
+# -------------------------
+# Dados para gráficos
+# -------------------------
 def dados_categoria():
     categorias = []
     for i in range(2, ws.max_row + 1):
@@ -272,6 +319,7 @@ def dados_mensal_crescimento():
         cumulativo.append(s)
     return labels, valores, cumulativo
 
+# Plotting helpers (opens native Matplotlib windows)
 _cat_fig = None
 _cat_ax = None
 _month_fig = None
@@ -281,7 +329,7 @@ def open_pie_saida():
     global _cat_fig, _cat_ax
     labels, sizes = dados_categoria()
     if not labels:
-        logger.info("Gráfico: sem dados de Saida")
+        logger.info("[GRAFICO] sem dados de Saida")
         return None
     _cat_fig, _cat_ax = plt.subplots(figsize=(6,6))
     try:
@@ -298,7 +346,7 @@ def open_month_plot():
     global _month_fig, _month_ax
     labels, valores, cumulativo = dados_mensal_crescimento()
     if not labels:
-        logger.info("Gráfico mensal: sem dados")
+        logger.info("[GRAFICO] mensal: sem dados")
         return None
     _month_fig, _month_ax = plt.subplots(figsize=(8,4))
     try:
@@ -316,7 +364,12 @@ def open_month_plot():
     plt.show(block=False)
     return _month_fig
 
+# -------------------------
+# Shutdown/backup helper
+# -------------------------
 def finalize_and_backup_logs():
+    # registra encerramento
+    logger.info(f"==== ENCERRANDO SISTEMA ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ====")
     handlers = logger.handlers[:]
     for h in handlers:
         try:
@@ -327,7 +380,7 @@ def finalize_and_backup_logs():
         logger.removeHandler(h)
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = os.path.join(LOG_DIR, f"operations_{ts}.log")
+        dest = os.path.join(LOG_DIR, f"gestor_financeiro_{ts}.txt")
         if os.path.exists(RUN_LOG):
             shutil.copy2(RUN_LOG, dest)
         else:
@@ -335,5 +388,5 @@ def finalize_and_backup_logs():
                 f.write(f"No run log found. Created empty final log at {ts}\n")
         return dest
     except Exception:
-        logger.exception("FAILED_TO_BACKUP_LOG")
+        # não usar logger aqui porque já fechamos handlers; ainda assim tentamos relatar
         return None

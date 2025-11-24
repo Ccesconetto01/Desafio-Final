@@ -4,8 +4,9 @@ from tkinter import messagebox
 import funcoes
 import logging
 
-logger = logging.getLogger("gestor_financeiro")
+logger = logging.getLogger("gestor_financeiro")  # usa mesmo logger do funcoes
 
+# manter estado da sessão aqui
 current_user = None
 
 # GUI-build
@@ -28,6 +29,7 @@ for nome in ["menu", "add", "remover", "categoria", "periodo", "saldo", "login",
 def mostrar_tela(nome):
     telas[nome].tkraise()
 
+# --- MENU ---
 menu = telas["menu"]
 tk.Label(menu, text="MENU PRINCIPAL", font=("Arial", 16)).pack(pady=12)
 
@@ -35,13 +37,29 @@ status_frame = tk.Frame(menu)
 status_frame.pack(pady=4)
 lbl_user = tk.Label(status_frame, text="Usuário: (não logado)", fg="blue")
 lbl_user.pack()
+lbl_saldo = tk.Label(status_frame, text="Saldo: -", fg="green")
+lbl_saldo.pack()
 
 def atualizar_label_user():
     if current_user:
         lbl_user.config(text=f"Usuário: {current_user}")
+        # atualiza saldo exibido no menu (apenas valor final)
+        texto = funcoes.ver_saldo(current_user)
+        # extrai "Saldo Final"
+        saldo_line = ""
+        for line in texto.splitlines():
+            if "Saldo Final" in line:
+                saldo_line = line.split(":")[1].strip()
+                break
+        if saldo_line:
+            lbl_saldo.config(text=f"Saldo: {saldo_line}")
+        else:
+            lbl_saldo.config(text="Saldo: R$0.00")
     else:
         lbl_user.config(text="Usuário: (não logado)")
+        lbl_saldo.config(text="Saldo: -")
 
+# Botões (referenciados)
 btn_login = tk.Button(menu, text="Entrar", width=20, command=lambda: mostrar_tela("login")); btn_login.pack(pady=4)
 btn_register = tk.Button(menu, text="Cadastrar", width=20, command=lambda: mostrar_tela("register")); btn_register.pack(pady=4)
 btn_logout = tk.Button(menu, text="Logout", width=20, command=lambda: do_logout()); btn_logout.pack(pady=4)
@@ -49,7 +67,7 @@ btn_logout = tk.Button(menu, text="Logout", width=20, command=lambda: do_logout(
 def require_login_then_show(tela_nome):
     if current_user is None:
         messagebox.showwarning("Autenticação", "Faça login para acessar esta função.")
-        logger.warning(f"ACCESS_DENIED_UI | tentar acessar {tela_nome} sem login")
+        logger.warning(f"[ACCESS_NEGADO_UI] tentar acessar {tela_nome} sem login")
         mostrar_tela("login")
     else:
         mostrar_tela(tela_nome)
@@ -60,6 +78,7 @@ btn_list_cat = tk.Button(menu, text="Listar por categoria", width=40, command=la
 btn_list_period = tk.Button(menu, text="Listar por período", width=40, command=lambda: mostrar_tela("periodo")); btn_list_period.pack(pady=5)
 btn_view_balance = tk.Button(menu, text="Ver saldo", width=40, command=lambda: mostrar_tela("saldo")); btn_view_balance.pack(pady=5)
 
+# gráficos (abrem apenas quando usuário clica)
 btn_graf_cat = tk.Button(menu, text="Gráfico: saídas por categoria (pizza)", width=40, command=lambda: require_login_then_show("menu") or funcoes.open_pie_saida()); btn_graf_cat.pack(pady=5)
 btn_graf_mth = tk.Button(menu, text="Gráfico: valor mês a mês (cumulativo)", width=40, command=lambda: require_login_then_show("menu") or funcoes.open_month_plot()); btn_graf_mth.pack(pady=5)
 
@@ -79,6 +98,7 @@ def set_operation_buttons(enabled: bool):
 
 set_operation_buttons(False)
 
+# --- TELA ADD ---
 add = telas["add"]
 tk.Label(add, text="ADICIONAR TRANSAÇÃO", font=("Arial", 14)).pack(pady=10)
 tk.Label(add, text="Tipo (Entrada/Saida):").pack()
@@ -99,7 +119,7 @@ def confirmar_add():
     global current_user
     if current_user is None:
         messagebox.showwarning("Autenticação", "Faça login para adicionar transações.")
-        logger.warning("ADICIONAR_NEGADO_UI | tentativa sem login")
+        logger.warning("[ADICIONAR_NEGADO_UI] tentativa sem login")
         return
     try:
         linha = funcoes.adicionar_transacao(
@@ -116,11 +136,9 @@ def confirmar_add():
         e_tipo.delete(0, tk.END); e_cat.delete(0, tk.END); e_mes.delete(0, tk.END)
         e_ano.delete(0, tk.END); e_val.delete(0, tk.END); e_desc.delete(0, tk.END)
         e_tipo.focus_set()
-        try:
-            funcoes.open_pie_saida()
-            funcoes.open_month_plot()
-        except Exception:
-            pass
+        # não abrir gráficos automaticamente (conforme pedido)
+        # atualiza label de saldo no menu
+        atualizar_label_user()
     except PermissionError as pe:
         messagebox.showwarning("Autenticação", str(pe))
     except Exception:
@@ -130,6 +148,7 @@ def confirmar_add():
 tk.Button(add, text="Salvar", width=20, command=confirmar_add).pack(pady=8)
 tk.Button(add, text="Voltar", width=20, command=lambda: mostrar_tela("menu")).pack(pady=4)
 
+# --- TELA REMOVER ---
 rem = telas["remover"]
 tk.Label(rem, text="REMOVER TRANSAÇÃO", font=("Arial", 14)).pack(pady=10)
 tk.Label(rem, text="Número da transação (igual ao Excel):").pack()
@@ -140,7 +159,7 @@ def confirmar_rem():
     global current_user
     if current_user is None:
         messagebox.showwarning("Autenticação", "Faça login para remover transações.")
-        logger.warning("REMOVER_NEGADO_UI | tentativa sem login")
+        logger.warning("[REMOVER_NEGADO_UI] tentativa sem login")
         return
     try:
         n = int(e_rem.get().strip())
@@ -149,11 +168,8 @@ def confirmar_rem():
             msg_rem["text"] = "Removido!"
             msg_rem.config(fg="green")
             e_rem.delete(0, tk.END); e_rem.focus_set()
-            try:
-                funcoes.open_pie_saida()
-                funcoes.open_month_plot()
-            except Exception:
-                pass
+            # atualiza label de saldo no menu
+            atualizar_label_user()
         else:
             msg_rem["text"] = "Número inválido ou você não tem permissão para remover."
             msg_rem.config(fg="red")
@@ -168,6 +184,7 @@ def confirmar_rem():
 tk.Button(rem, text="Remover", width=20, command=confirmar_rem).pack(pady=8)
 tk.Button(rem, text="Voltar", width=20, command=lambda: mostrar_tela("menu")).pack(pady=4)
 
+# --- TELA CATEGORIA ---
 cat = telas["categoria"]
 tk.Label(cat, text="LISTAR POR CATEGORIA", font=("Arial", 14)).pack(pady=10)
 tk.Label(cat, text="Categoria:").pack()
@@ -178,6 +195,7 @@ def confirmar_cat():
 tk.Button(cat, text="Listar", width=20, command=confirmar_cat).pack(pady=8)
 tk.Button(cat, text="Voltar", width=20, command=lambda: mostrar_tela("menu")).pack(pady=4)
 
+# --- TELA PERIODO ---
 per = telas["periodo"]
 tk.Label(per, text="LISTAR POR PERÍODO", font=("Arial", 14)).pack(pady=10)
 tk.Label(per, text="Mês inicial:").pack(); e_mi = tk.Entry(per); e_mi.pack()
@@ -200,10 +218,16 @@ sal = telas["saldo"]
 tk.Label(sal, text="SALDO ATUAL", font=("Arial", 14)).pack(pady=20)
 res_sal = tk.Label(sal, text="", justify="left"); res_sal.pack(pady=12)
 def atualizar_saldo():
-    res_sal["text"] = funcoes.ver_saldo()
+    global current_user
+    if current_user:
+        res_sal["text"] = funcoes.ver_saldo(current_user)
+    else:
+        # mostrar saldo global (ou trocar por aviso de login se preferir)
+        res_sal["text"] = funcoes.ver_saldo(None)
 tk.Button(sal, text="Atualizar saldo", width=20, command=atualizar_saldo).pack(pady=8)
 tk.Button(sal, text="Voltar", width=20, command=lambda: mostrar_tela("menu")).pack(pady=4)
 
+# --- LOGIN / REGISTER ---
 login = telas["login"]
 tk.Label(login, text="LOGIN", font=("Arial", 14)).pack(pady=10)
 tk.Label(login, text="Usuário:").pack(); login_user = tk.Entry(login); login_user.pack()
@@ -220,7 +244,7 @@ def tentar_login():
     if ok:
         current_user = user
         login_msg.config(text=f"Bem-vindo, {user}!", fg="green")
-        logger.info(f"SESSION_START | user={user}")
+        logger.info(f"[SESSION_START] user={user}")
         login_user.delete(0, tk.END); login_pass.delete(0, tk.END)
         atualizar_label_user()
         set_operation_buttons(True)
@@ -250,7 +274,7 @@ def tentar_cadastro():
     ok = funcoes.create_user(u, p)
     if ok:
         reg_msg.config(text="Cadastro realizado! Faça login.", fg="green")
-        logger.info(f"USER_REGISTERED | user={u}")
+        logger.info(f"[USER_REGISTERED] user={u}")
         reg_user.delete(0, tk.END); reg_pass.delete(0, tk.END); reg_pass2.delete(0, tk.END)
         mostrar_tela("login")
     else:
@@ -259,16 +283,18 @@ def tentar_cadastro():
 tk.Button(register, text="Cadastrar", width=20, command=tentar_cadastro).pack(pady=6)
 tk.Button(register, text="Voltar", width=20, command=lambda: mostrar_tela("menu")).pack(pady=4)
 
+# Logout
 def do_logout():
     global current_user
     if current_user is None:
         messagebox.showinfo("Logout", "Nenhum usuário logado."); return
-    logger.info(f"SESSION_END | user={current_user}")
+    logger.info(f"[SESSION_END] user={current_user}")
     current_user = None
     atualizar_label_user()
     set_operation_buttons(False)
     messagebox.showinfo("Logout", "Você saiu da sessão.")
 
+# Shutdown handler: copy log file with timestamp
 def on_exit():
     try:
         if messagebox.askokcancel("Sair", "Deseja sair e salvar o log da sessão?"):
@@ -284,6 +310,7 @@ def on_exit():
 
 janela.protocol("WM_DELETE_WINDOW", on_exit)
 
+# start
 atualizar_label_user()
 mostrar_tela("menu")
 janela.mainloop()
